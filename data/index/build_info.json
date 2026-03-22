@@ -1,0 +1,8 @@
+{
+  "embedding_model": "text-embedding-v4",
+  "chunk_count": 337,
+  "vector_dim": 1024,
+  "faiss_index_path": "E:\\MyProjects\\ITUassistant\\data\\index\\itu_chunks.faiss",
+  "metadata_path": "E:\\MyProjects\\ITUassistant\\data\\index\\chunk_metadata.json",
+  "source_chunks_csv": "E:\\MyProjects\\ITUassistant\\data\\exports\\chunks.csv"
+}
