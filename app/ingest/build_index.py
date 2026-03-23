@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 from pathlib import Path
 import json
 import os
-from typing import Any, Dict, List
+from typing import List, Dict, Any
 
 import faiss
 import numpy as np
@@ -11,7 +13,7 @@ from openai import OpenAI
 
 
 # =========================
-# 路径配置
+# 路径
 # =========================
 BASE_DIR = Path(r"E:\MyProjects\ITUassistant")
 CHUNKS_CSV = BASE_DIR / "data" / "exports" / "chunks.csv"
@@ -45,9 +47,6 @@ def load_client() -> OpenAI:
 
 
 def load_chunks(csv_path: Path) -> pd.DataFrame:
-    """
-    读取 chunks.csv
-    """
     if not csv_path.exists():
         raise FileNotFoundError(f"Chunks CSV not found: {csv_path}")
 
@@ -71,9 +70,18 @@ def load_chunks(csv_path: Path) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Missing required columns in chunks.csv: {missing}")
 
-    # 清理空文本
     df["text"] = df["text"].fillna("").astype(str).str.strip()
-    df = df[df["text"] != ""].reset_index(drop=True)
+    df["title"] = df["title"].fillna("").astype(str).str.strip()
+
+    # 基础过滤
+    df = df[df["text"] != ""].copy()
+    df = df[df["chunk_chars"].fillna(0).astype(int) >= 120].copy()
+
+    # chunk 级去重
+    df["text_hash"] = df["text"].map(lambda x: hash(x))
+    df = df.drop_duplicates(subset=["text_hash"]).drop(columns=["text_hash"])
+
+    df = df.reset_index(drop=True)
 
     if df.empty:
         raise ValueError("No valid chunk text found in chunks.csv")
@@ -83,30 +91,18 @@ def load_chunks(csv_path: Path) -> pd.DataFrame:
 
 def prepare_embedding_text(row: pd.Series) -> str:
     """
-    给 embedding 用的文本。
-    这里不只放正文，也加一点轻量 metadata，帮助语义检索更稳。
+    embedding 文本尽量简洁。
+    不要塞 filename / 页码 / 一堆 metadata，避免干扰语义。
     """
     title = str(row.get("title", "")).strip()
-    doc_type = str(row.get("doc_type", "")).strip()
-    filename = str(row.get("filename", "")).strip()
-    page_start = row.get("page_start", "")
-    page_end = row.get("page_end", "")
     text = str(row.get("text", "")).strip()
 
-    parts = [
-        f"Title: {title}",
-        f"Document type: {doc_type}",
-        f"Filename: {filename}",
-        f"Pages: {page_start}-{page_end}",
-        f"Content: {text}",
-    ]
-    return "\n".join(parts)
+    if title:
+        return f"{title}\n\n{text}"
+    return text
 
 
 def get_embeddings_batch(client: OpenAI, texts: List[str], model: str) -> List[List[float]]:
-    """
-    批量生成 embedding
-    """
     response = client.embeddings.create(
         model=model,
         input=texts,
@@ -118,6 +114,7 @@ def build_faiss_index(vectors: np.ndarray):
     if vectors.dtype != np.float32:
         vectors = vectors.astype("float32")
 
+    # 归一化后 + Inner Product = 近似 cosine similarity
     faiss.normalize_L2(vectors)
 
     dim = vectors.shape[1]
@@ -127,27 +124,22 @@ def build_faiss_index(vectors: np.ndarray):
 
 
 def build_metadata(df: pd.DataFrame) -> List[Dict[str, Any]]:
-    """
-    保存与 FAISS 向量一一对应的 metadata
-    """
     metadata: List[Dict[str, Any]] = []
 
     for _, row in df.iterrows():
-        metadata.append(
-            {
-                "chunk_id": row["chunk_id"],
-                "filename": row["filename"],
-                "title": row["title"],
-                "source_org": row["source_org"],
-                "doc_type": row["doc_type"],
-                "year": None if pd.isna(row["year"]) else int(row["year"]),
-                "language": row["language"],
-                "page_start": int(row["page_start"]),
-                "page_end": int(row["page_end"]),
-                "chunk_chars": int(row["chunk_chars"]),
-                "text": row["text"],
-            }
-        )
+        metadata.append({
+            "chunk_id": row["chunk_id"],
+            "filename": row["filename"],
+            "title": row["title"],
+            "source_org": row["source_org"],
+            "doc_type": row["doc_type"],
+            "year": None if pd.isna(row["year"]) else int(row["year"]),
+            "language": row["language"],
+            "page_start": int(row["page_start"]),
+            "page_end": int(row["page_end"]),
+            "chunk_chars": int(row["chunk_chars"]),
+            "text": row["text"],
+        })
 
     return metadata
 
@@ -158,7 +150,7 @@ def main() -> None:
     print(f"Loaded {len(df)} chunks.")
 
     print("Preparing texts for embedding...")
-    texts = df["text"].astype(str).tolist()
+    texts = [prepare_embedding_text(row) for _, row in df.iterrows()]
 
     client = load_client()
 
@@ -191,6 +183,8 @@ def main() -> None:
         "embedding_model": EMBEDDING_MODEL,
         "chunk_count": len(metadata),
         "vector_dim": int(vectors.shape[1]),
+        "faiss_index_type": "IndexFlatIP",
+        "normalized": True,
         "faiss_index_path": str(FAISS_INDEX_PATH),
         "metadata_path": str(METADATA_PATH),
         "source_chunks_csv": str(CHUNKS_CSV),
