@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 from app.rag.retrieve import search
 from app.rag.ask import ask
 
+import traceback
+
 
 app = FastAPI(
     title="ITU Assistant API",
@@ -102,7 +104,9 @@ def retrieve_endpoint(req: QueryRequest) -> RetrieveResponse:
             results=results,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Retrieve failed: {e}")
+        print("\n[RETRIEVE ERROR]")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Retrieve failed: {str(e)}")
 
 
 @app.post("/ask", response_model=AskResponse)
@@ -116,4 +120,7 @@ def ask_endpoint(req: QueryRequest) -> AskResponse:
             results=result["results"],
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ask failed: {e}")
+        print("\n[ASK ERROR]")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Ask failed: {str(e)}")
+
